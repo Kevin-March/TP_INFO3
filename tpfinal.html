@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Football Field in Three.js</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 10px;
+      font-family: Arial, sans-serif;
+    }
+    #aim {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 50px;
+      height: 50px;
+      margin-left: -25px;
+      margin-top: -25px;
+      border: 2px solid red;
+      border-radius: 50%;
+      display: none; /* Oculto por defecto */
+    }
+    #powerBarContainer {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      width: 200px;
+      height: 20px;
+      background: rgba(255, 255, 255, 0.3);
+      border: 1px solid #fff;
+      transform: translateX(-50%);
+      display: none; /* Oculto por defecto */
+    }
+    #powerBar {
+      height: 100%;
+      background: red;
+      width: 0%;
+    }
+    #goalMessage {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 5rem;
+      color: yellow;
+      text-shadow: 2px 2px 5px black;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <p>Camera Position:</p>
+    <p id="cameraPosition">X: 0, Y: 2, Z: -20</p>
+  </div>
+  <div id="aim"></div>
+  <div id="powerBarContainer">
+    <div id="powerBar"></div>
+  </div>
+  <div id="goalMessage">GOOOOOL!!!</div>
+  <!-- Añadir elementos de audio -->
+  <audio id="backgroundMusic" loop>
+    <source src="waka_waka.mp3" type="audio/mpeg">
+    Your browser does not support the audio element.
+  </audio>
+  <audio id="goalMusic">
+    <source src="como_te_quiero_paraguay.mp3" type="audio/mpeg">
+    Your browser does not support the audio element.
+  </audio>
+  <script type="module">
+    import * as THREE from './three.js/build/three.module.js';
+    import { OrbitControls } from './three.js/examples/jsm/controls/OrbitControls.js';
+    import { FontLoader } from './three.js/examples/jsm/loaders/FontLoader.js';
+    import { TextGeometry } from './three.js/examples/jsm/geometries/TextGeometry.js';
+
+    // Obtener los elementos de audio
+    const backgroundMusic = document.getElementById('backgroundMusic');
+    const goalMusic = document.getElementById('goalMusic');
+
+    // Configuración inicial
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // HUD para la posición de la cámara y el aim
+    const aimElement = document.getElementById('aim');
+    const powerBarContainer = document.getElementById('powerBarContainer');
+    const powerBar = document.getElementById('powerBar');
+    const cameraPositionElement = document.getElementById('cameraPosition');
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    // Estados
+    let showAim = false;
+    let power = 0;
+    let powerInterval;
+    let ballVelocity = new THREE.Vector3(0, 0, 0);
+    const ballOriginalPosition = new THREE.Vector3(0, 0.22, -11);
+    let resetTimeout;
+    const gravity = new THREE.Vector3(0, -0.02, 0); // Gravedad constante en el eje Y
+    const goalWidth = 37.32; // Ancho de la portería
+    const goalHeight = 12.44; // Altura de la portería
+
+    const palo_R= 18.44;
+    const portero_w= 5;
+    const portero_h= 9;
+
+    const goalkeeperVelocity = new THREE.Vector3(0, 0, 0); // Velocidad del portero
+    const goalkeeperGravity = new THREE.Vector3(0, -0.08, 0); // Gravedad constante para el portero
+    const goalkeeperGroundLevel = 3.5; // Nivel del suelo del portero
+
+    let isMovingToBall = false;
+    let playerTargetPosition = new THREE.Vector3(0,0,0);
+
+    // Estado para controlar si ya se registró un gol
+    let isGoal = false;
+
+    // Función para manejar el evento de gol
+    function handleGoal() {
+      if (isGoal) return; // Salir si ya se detectó un gol
+
+      isGoal = true; // Marcar que el gol se registró
+      playGoalMusic(); // Reproducir la música de gol
+      showGoalMessage('GOOOOOL!!!');
+
+      // Reiniciar la pelota después de 20 segundos
+      setTimeout(() => {
+        resetBallPosition();
+        isGoal = false; // Permitir nuevos goles
+      }, 20000);
+    }
+    // Iniciar la música de fondo al cargar la página
+    window.addEventListener('load', () => {
+      backgroundMusic.play();
+    });
+    // Función para cambiar a la música de gol
+    function playGoalMusic() {
+      backgroundMusic.pause();
+      goalMusic.currentTime = 0; // Reiniciar la música de gol
+      goalMusic.play();
+    }
+
+    // Función para volver a la música de fondo
+    function resetMusic() {
+      goalMusic.pause();
+      backgroundMusic.currentTime = 0; // Reiniciar la música de fondo
+      backgroundMusic.play();
+    }
+
+
+    // Función para manejar clic derecho
+    document.addEventListener('contextmenu', (e) => {
+      e.preventDefault(); // Prevenir menú contextual
+      showAim = !showAim;
+      aimElement.style.display = showAim ? 'block' : 'none';
+      powerBarContainer.style.display = showAim ? 'block' : 'none';
+    });
+
+    // Función para manejar clic izquierdo
+    document.addEventListener('mousedown', (e) => {
+      if (e.button === 0 && showAim) { // Clic izquierdo con aim activado
+        power = 0;
+        powerBar.style.width = '0%';
+        powerInterval = setInterval(() => {
+          if (power < 100) {
+            power += 5; // Incrementar el poder en 5% cada 100 ms
+            powerBar.style.width = `${power}%`;
+          }
+        }, 100);
+      }
+    });
+    // Evento para reiniciar la posición de la pelota al presionar "R"
+    document.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'r') {
+        resetBallPosition();
+        clearTimeout(resetTimeout); // Cancelar el temporizador de reinicio
+      }
+    });
+
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0 && showAim) { // Soltar clic izquierdo con aim activado
+        clearInterval(powerInterval);
+        powerBar.style.width = '0%';
+    
+        // Llama a `movePlayer` y pasa el evento `e` para reutilizar los datos del clic
+        movePlayer(e);
+      }
+    });
+    // Detección de goles y colisiones
+    function checkGoalOrCollision() {
+      // Detectar gol en la portería 1
+      if (
+        (ball.position.z <= -35) &&
+        ball.position.y <= goalHeight &&
+        (ball.position.x <= 18.44 && ball.position.x >= -18.44)
+      ) 
+        if (isBallCollidingWithGoalkeeper()) {
+          console.log("La pelota fue detenida por el portero");
+          ballVelocity.set(0, 0, 0); // Detener la pelota
+          ball.position.z = goalkeeper.position.z; // Asegurar que la pelota quede justo frente al portero
+        } else {
+          console.log('GOOOOOL!!! en la Portería 1');
+          handleGoal();
+          
+
+        }
+
+      // Detectar gol en la portería 2
+      if (
+        ball.position.z >= 35 && // Detrás de la línea de portería 2
+        ball.position.y <= goalHeight &&
+        (ball.position.x <= 18.44 && ball.position.x >= -18.44)
+      ) {
+        console.log('GOOOOOL!!! en la Portería 2');
+        showGoalMessage('¡Gol en contra!');
+      }
+
+      // Detectar colisión con los postes y el travesaño
+      if (
+        (Math.abs(ball.position.x) >= goalWidth / 2 && ball.position.y <= goalHeight && Math.abs(ball.position.z) > 33.5) ||
+        (ball.position.y >= goalHeight && Math.abs(ball.position.z) > 33.5)
+      ) {
+        console.log('La pelota rebotó en el poste o el travesaño');
+        ballVelocity.multiplyScalar(-1); // Invertir dirección para simular rebote
+      }
+    }
+
+    // Mostrar mensaje de gol personalizado
+    function showGoalMessage(message) {
+      const goalMessage = document.getElementById('goalMessage');
+      goalMessage.textContent = message; // Cambiar el texto según el argumento
+      goalMessage.style.display = 'block';
+      setTimeout(() => {
+        goalMessage.style.display = 'none';
+      }, 3000);
+    }
+
+    // Animación de la pelota
+    function updateBallPosition() {
+      ballVelocity.add(gravity); // Aplicar gravedad
+      ball.position.add(ballVelocity);
+      console.log(`Posición actual de la pelota: X=${ball.position.x.toFixed(2)}, Y=${ball.position.y.toFixed(2)}, Z=${ball.position.z.toFixed(2)} ;; Posición actual del portero : X=${goalkeeper.position.x.toFixed(2)}, Y=${goalkeeper.position.y.toFixed(2)}, Z=${goalkeeper.position.z.toFixed(2)}`);
+      checkGoalOrCollision()
+      // Simular colisión con el césped
+      if (ball.position.y <= 0.42) {
+        ball.position.y = 0.42;
+        ballVelocity.y = 0; // Detener movimiento vertical
+      }
+      // Verificar colisión con el portero
+      if (isBallCollidingWithGoalkeeper()) {
+        console.log("La pelota fue detenida por el portero");
+        ballVelocity.set(0, 0, 0); // Detener la pelota
+        ball.position.z = goalkeeper.position.z; // Asegurar que la pelota quede justo frente al portero
+      }
+      // Detectar colisión con el travesaño
+      if (
+        Math.abs(ball.position.x) <= goalWidth / 2 && // Dentro del ancho de la portería
+        Math.abs(ball.position.z + 34) <= 0.5 && // En la profundidad del travesaño
+        Math.abs(ball.position.y - goalHeight) <= 0.5 // En la altura del travesaño
+      ) {
+        console.log("La pelota golpeó el travesaño");
+        ballVelocity.y = -Math.abs(ballVelocity.y) * 0.7; // Rebote hacia abajo con pérdida de energía
+      }
+      // Reducir velocidad en X y Z para simular fricción
+      ballVelocity.x *= 0.98;
+      ballVelocity.z *= 0.98;
+
+      // Detener completamente si la velocidad es muy baja
+      if (ballVelocity.length() < 0.01) ballVelocity.set(0, 0, 0);
+    }
+    // Función para reiniciar la posición de la pelota
+    function resetBallPosition() {
+      ball.position.copy(ballOriginalPosition);
+      ballVelocity.set(0, 0, 0);
+      // Reiniciar la posición del portero
+      goalkeeper.position.set(0, 2.5, -33.5); // Volver al centro de la portería
+      goalkeeper.rotation.set(0, 0, 0); // Restablecer rotación
+      player.position.set(0,3.5,-5) // restablecer a tacuara
+      player.rotation.set(0,0,0) // restablecer a tacuara
+      resetMusic(); // Volver a la música de fondo
+    }
+    // Agrega iluminación
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    directionalLight.position.set(10, 20, 10);
+    scene.add(directionalLight);
+
+    // Crear el campo de fútbol con textura repetida
+    const fieldTexture = new THREE.TextureLoader().load('./cesped.jpg');
+    fieldTexture.wrapS = THREE.RepeatWrapping; // Repetir horizontalmente
+    fieldTexture.wrapT = THREE.RepeatWrapping; // Repetir verticalmente
+    fieldTexture.repeat.set(10, 6); // Número de repeticiones en X e Y
+
+    // Rotar la textura 90 grados
+    fieldTexture.center.set(0.5, 0.5); // Centrar el origen de la rotación
+    fieldTexture.rotation = Math.PI / 2; // Rotar 90 grados (en radianes)
+
+    const fieldMaterial = new THREE.MeshStandardMaterial({ map: fieldTexture });
+    const fieldGeometry = new THREE.PlaneGeometry(105, 68);
+    const field = new THREE.Mesh(fieldGeometry, fieldMaterial);
+    field.rotation.x = -Math.PI / 2; // Mantener la orientación del plano
+    scene.add(field);
+
+    // Crear las porterías
+    const goalMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const goalFrameGeometry = new THREE.BoxGeometry(goalWidth, goalHeight, 0.1);
+    const goalNetGeometry = new THREE.PlaneGeometry(7.32, 2.44);
+
+    // Portería 1
+    const goal1 = new THREE.Mesh(goalFrameGeometry, goalMaterial);
+    goal1.position.set(0, goalHeight/2, -34);
+    scene.add(goal1);
+
+    // Portería 2
+    const goal2 = new THREE.Mesh(goalFrameGeometry, goalMaterial);
+    goal2.position.set(0, goalHeight/2, 34);
+    scene.add(goal2);
+
+    
+    // Crear a iker
+    const goalkeeperTexture = new THREE.TextureLoader().load('./iker.jpg');
+    const goalkeeperGeometry = new THREE.BoxGeometry(portero_w, portero_h, 0.5); // Geometría del portero (más ancho y alto)
+    const goalkeeperMaterial = new THREE.MeshStandardMaterial({ map: goalkeeperTexture }); // Material verde
+    const goalkeeper = new THREE.Mesh(goalkeeperGeometry, goalkeeperMaterial);
+    goalkeeper.position.set(0, 9.5, -33.5); // Centrado en la portería 1
+    scene.add(goalkeeper);
+
+    // Crear a tacuara
+    // Cargar las texturas
+    const playerFrontTexture = new THREE.TextureLoader().load('./tacuara.jpg'); // Textura del frente
+    const playerBackTexture = new THREE.TextureLoader().load('./tacuara-back.jpg'); // Textura del dorso
+
+    // Crear los materiales para cada cara
+    const playerMaterials = [
+      new THREE.MeshStandardMaterial({ color: 0x000000 }), // Lado +X (negro)
+      new THREE.MeshStandardMaterial({ color: 0x000000 }), // Lado -X (negro)
+      new THREE.MeshStandardMaterial({ color: 0x000000 }), // Lado +Y (negro)
+      new THREE.MeshStandardMaterial({ color: 0x000000 }), // Lado -Y (negro)
+      new THREE.MeshStandardMaterial({ map: playerBackTexture }),  // Lado -Z (frontal)
+      new THREE.MeshStandardMaterial({ map: playerFrontTexture }) // Lado +Z (dorso)
+      
+    ];
+
+    // Crear la geometría del jugador
+    const playerGeometry = new THREE.BoxGeometry(portero_w, portero_h, 0.5);
+
+    // Crear el mesh del jugador con el array de materiales
+    const player = new THREE.Mesh(playerGeometry, playerMaterials);
+    player.position.set(0, 3.5, -5);
+    scene.add(player);
+
+    // Añadir pelota
+    const ballTexture = new THREE.TextureLoader().load('./jabulani.jpg'); // Carga la textura
+    const ballMaterial = new THREE.MeshStandardMaterial({ map: ballTexture }); // Aplica la textura al material
+    const ballGeometry = new THREE.SphereGeometry(0.42, 32, 32);
+    const ball = new THREE.Mesh(ballGeometry, ballMaterial);
+    ball.position.set(0, 0.8, -11);
+    scene.add(ball);
+
+    // Crear poste derecho porteria 1
+    const postMaterial_R = new THREE.MeshStandardMaterial({ color: 0X0000ff });
+    const postGeometry_R = new THREE.CylinderGeometry(0.5, 0.5, goalHeight, 32); // Poste cilíndrico
+    const post_R = new THREE.Mesh(postGeometry_R, postMaterial_R);
+    post_R.position.set(palo_R, goalHeight / 2, -34); // Posición del poste
+    scene.add(post_R);
+    // Crear poste izquierdo porteria 1
+    const postMaterial_L = new THREE.MeshStandardMaterial({ color: 0X0000ff });
+    const postGeometry_L = new THREE.CylinderGeometry(0.5, 0.5, goalHeight, 32); // Poste cilíndrico
+    const post_L = new THREE.Mesh(postGeometry_L, postMaterial_L);
+    post_L.position.set(-palo_R, goalHeight / 2, -34); // Posición del poste
+    scene.add(post_L);
+    //Crear poste superior porteria 1
+    const postMaterial_T = new THREE.MeshStandardMaterial({ color: 0x0000ff });
+    const postGeometry_T = new THREE.CylinderGeometry(0.5, 0.5, goalWidth, 32); // Poste cilíndrico horizontal
+    const post_T = new THREE.Mesh(postGeometry_T, postMaterial_T);
+    post_T.position.set(0, goalHeight, -34); // Centrado en X, altura máxima, y profundidad del arco
+    post_T.rotation.z = Math.PI / 2; // Rotar el cilindro para que sea horizontal
+    scene.add(post_T);
+
+    // Crear poste derecho porteria 2
+    const postMaterial_R2 = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+    const postGeometry_R2 = new THREE.CylinderGeometry(0.5, 0.5, goalHeight, 32); // Poste cilíndrico
+    const post_R2 = new THREE.Mesh(postGeometry_R2, postMaterial_R2);
+    post_R2.position.set(palo_R, goalHeight / 2, 34); // Posición del poste
+    scene.add(post_R2);
+    // Crear poste izquierdo porteria 1
+    const postMaterial_L2 = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+    const postGeometry_L2 = new THREE.CylinderGeometry(0.5, 0.5, goalHeight, 32); // Poste cilíndrico
+    const post_L2 = new THREE.Mesh(postGeometry_L2, postMaterial_L2);
+    post_L2.position.set(-palo_R, goalHeight / 2, 34); // Posición del poste
+    scene.add(post_L2);
+    //Crear poste superior porteria 1
+    const postMaterial_T2 = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+    const postGeometry_T2 = new THREE.CylinderGeometry(0.5, 0.5, goalWidth, 32); // Poste cilíndrico horizontal
+    const post_T2 = new THREE.Mesh(postGeometry_T2, postMaterial_T2);
+    post_T2.position.set(0, goalHeight, 34); // Centrado en X, altura máxima, y profundidad del arco
+    post_T2.rotation.z = Math.PI / 2; // Rotar el cilindro para que sea horizontal
+    scene.add(post_T2);
+
+    // Crear el domo del estadio con textura equirectangular
+    const audienceTexture = new THREE.TextureLoader().load('./stadium.jpg'); // Cargar la textura equirectangular
+    audienceTexture.offset.set(-0.1, 0);
+    const stadiumMaterial = new THREE.MeshStandardMaterial({
+      map: audienceTexture,
+      side: THREE.BackSide, // Renderizar el interior de la esfera
+    });
+
+    const stadiumGeometry = new THREE.SphereGeometry(80, 64, 32); // Geometría de una esfera completa
+    const stadium = new THREE.Mesh(stadiumGeometry, stadiumMaterial);
+    stadium.rotation.y = Math.PI; // Girar la esfera para alinear la textura correctamente
+    scene.add(stadium);
+
+    function moveGoalkeeper() {
+      const timeToGoal = Math.abs(-33.5 - ball.position.z) / Math.abs(ballVelocity.z || 0.01); // Evitar división por 0
+
+      // Predicción de las posiciones `x` y `y` de la pelota al momento de llegar al arco
+      const predictedX = ball.position.x + ballVelocity.x * timeToGoal;
+      const predictedY = ball.position.y + ballVelocity.y * timeToGoal + 0.5 * gravity.y * Math.pow(timeToGoal, 2);
+
+      // Limitar `x` dentro de los bordes de la portería
+      const targetX = Math.max(-18.44, Math.min(18.44, predictedX));
+
+      // Limitar `y` para que no sea mayor al límite de la portería
+      const targetY = Math.max(goalkeeperGroundLevel, Math.min(goalHeight, predictedY));
+
+      // Calcular el ángulo de rotación (inverso al movimiento en X)
+      const directionX = targetX - goalkeeper.position.x;
+      const rotationAngle = -Math.sign(directionX) * Math.PI / 8;
+
+      const duration = 500; // Duración del movimiento en milisegundos
+      const startX = goalkeeper.position.x; // Posición inicial en `x`
+      const startRotation = goalkeeper.rotation.z; // Rotación inicial
+      const startTime = performance.now(); // Tiempo inicial
+
+      // Iniciar salto hacia la posición `y` predicha
+      goalkeeperVelocity.y = (targetY - goalkeeper.position.y); // Ajustar velocidad vertical
+
+      function animateGoalkeeper() {
+        const elapsed = performance.now() - startTime; // Tiempo transcurrido
+        const progress = Math.min(elapsed / duration, 1); // Progreso (0 a 1)
+
+        // Interpolar posición en `x`
+        goalkeeper.position.x = startX + progress * (targetX - startX);
+
+        // Interpolar rotación
+        goalkeeper.rotation.z = startRotation + progress * (rotationAngle - startRotation);
+
+        if (progress < 1) {
+          requestAnimationFrame(animateGoalkeeper); // Continuar animación
+        } else {
+          // Volver a posición neutral después de intentar detener
+          setTimeout(() => {
+            goalkeeper.rotation.z = 0; // Restablecer rotación
+          }, 300);
+        }
+      }
+
+      animateGoalkeeper();
+    }
+
+    function updateGoalkeeperPosition() {
+      // Seguir la trayectoria de la pelota en tiempo real
+      goalkeeper.position.x = THREE.MathUtils.clamp(ball.position.x, -18.44, 18.44); // Limitar dentro de los bordes de la portería
+      goalkeeper.position.y = THREE.MathUtils.clamp(ball.position.y, goalkeeperGroundLevel, goalHeight); // Limitar dentro de la altura de la portería
+
+      // Si el portero está en el aire, aplica la gravedad
+      if (goalkeeper.position.y > goalkeeperGroundLevel) {
+        goalkeeperVelocity.add(goalkeeperGravity); // Aplicar gravedad
+        goalkeeper.position.y = Math.max(goalkeeper.position.y + goalkeeperVelocity.y, goalkeeperGroundLevel);
+      } else {
+        // Si el portero toca el suelo, restablece su velocidad vertical
+        goalkeeper.position.y = goalkeeperGroundLevel;
+        goalkeeperVelocity.y = 0;
+      }
+    }
+
+    function isBallCollidingWithGoalkeeper() {
+      const ballRadius = 0.5; // Radio de la pelota
+      const goalkeeperWidth = portero_w ; // Mitad del ancho del portero
+      const goalkeeperHeight = portero_h; // Altura del portero
+      const goalkeeperDepthTolerance = 0.8;
+
+      // Verificar si la pelota está dentro de los límites del portero
+      const withinX = Math.abs(ball.position.x - goalkeeper.position.x) <= goalkeeperWidth+1 + ballRadius;
+      const withinY = Math.abs(ball.position.y - goalkeeper.position.y) <= goalkeeperHeight / 2 + ballRadius;
+      const withinZ = Math.abs(ball.position.z - goalkeeper.position.z) <= ballRadius+ goalkeeperDepthTolerance; // Z del portero es constante
+      console.log(`pelota colisino con arquero X:${(ball.position.x - goalkeeper.position.x)}, Y:${(ball.position.y - goalkeeper.position.y)}, Z:${(ball.position.z - goalkeeper.position.z)}`)
+      console.log(`pelota colisino con arquero X:${withinX}, Y:${withinY}, Z:${withinZ}`)
+      
+      return withinX && withinY && withinZ;
+    }
+    // Función para mover al jugador hacia la pelota
+    function movePlayer(e) {
+      const playerSpeed = 0.2; // Velocidad del jugador
+      const targetZ = ball.position.z; // Posición Z de la pelota
+      const startZ = player.position.z;
+      const animationDuration = 1000; // Duración de la animación en milisegundos
+      const startTime = performance.now(); // Tiempo inicial
+    
+      function animatePlayer() {
+        const elapsed = performance.now() - startTime; // Tiempo transcurrido
+        const progress = Math.min(elapsed / animationDuration, 1); // Progreso (0 a 1)
+    
+        // Interpolación lineal hacia el targetZ
+        player.position.z = startZ + progress * (targetZ - startZ);
+    
+        if (progress < 1) {
+          requestAnimationFrame(animatePlayer);
+        } else {
+          // Animación completada, dispara la pelota
+          shootBall(e);
+          rotateAndAdvancePlayer(e);
+        }
+      }
+    
+      animatePlayer();
+    }
+    function rotateAndAdvancePlayer(e) {
+      const rotationAngle = THREE.MathUtils.degToRad(30); // 30 grados a radianes
+      const advanceDistance = 5; // Distancia para avanzar después de rotar
+      const advanceSpeed = 0.3; // Velocidad para avanzar
+      const initialPositionZ = player.position.z; // Posición inicial en Z
+      const initialPositionX = player.position.x; // Posición inicial en X
+    
+      // Rotar el jugador sobre su eje Y
+      player.rotation.y = rotationAngle;
+    
+      function advancePlayer() {
+        // Calcular el desplazamiento en X y Z según el ángulo de rotación
+        const directionX = Math.sin(-rotationAngle) * advanceSpeed; // Usar signo negativo para ajustar dirección
+        const directionZ = Math.cos(-rotationAngle) * -advanceSpeed; // Usar signo negativo para avanzar hacia Z negativo
+    
+        player.position.x += directionX;
+        player.position.z += directionZ;
+    
+        // Verificar si el jugador ha avanzado la distancia deseada
+        const distanceTraveled = Math.sqrt(
+          Math.pow(player.position.x - initialPositionX, 2) +
+            Math.pow(player.position.z - initialPositionZ, 2)
+        );
+    
+        if (distanceTraveled < advanceDistance) {
+          requestAnimationFrame(advancePlayer);
+        } 
+      }
+    
+      advancePlayer();
+    }
+    function shootBall(e) {
+      console.log("El jugador llegó a la posición. Calculando dirección y disparando la pelota...");
+    
+      // Calcular dirección del mouse en el espacio 3D
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const direction = raycaster.ray.direction.clone().normalize();
+      ballVelocity.copy(direction.multiplyScalar(power / 20)); // Escalar velocidad según el poder
+    
+      // Animar portero
+      moveGoalkeeper();
+    
+      // Reiniciar el temporizador de reinicio de pelota
+      clearTimeout(resetTimeout);
+      resetTimeout = setTimeout(resetBallPosition, 20000); // 20 segundos
+    }
+    // Configuración de la cámara
+    camera.position.set(0.1, 1.5, -6.84); // Vista inicial detrás de la pelota
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(ball.position.x, ball.position.y, ball.position.z); // Apuntar a la pelota
+    controls.minPolarAngle = Math.PI / 6; // Restringir la cámara para que no baje demasiado (mínimo 30°)
+    controls.maxPolarAngle = Math.PI / 2; // Restringir la cámara para que no suba más de 90°
+    controls.update();
+
+    // Actualización del HUD
+    controls.addEventListener('change', () => {
+      cameraPositionElement.textContent = `X: ${camera.position.x.toFixed(2)}, Y: ${camera.position.y.toFixed(2)}, Z: ${camera.position.z.toFixed(2)}`;
+    });
+
+    // Animación
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      updateBallPosition();
+      updateGoalkeeperPosition(); // Actualizar la posición del portero
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // Ajuste del tamaño de ventana
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

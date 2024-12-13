@@ -120,6 +120,7 @@
 
     let isMovingToBall = false;
     let playerTargetPosition = new THREE.Vector3(0,0,0);
+    let goalkeeperRemoved = false;
 
     // Estado para controlar si ya se registró un gol
     let isGoal = false;
@@ -180,6 +181,15 @@
     });
     // Evento para reiniciar la posición de la pelota al presionar "R"
     document.addEventListener('keydown', (e) => {
+      if (e.key.toLowerCase() === 'p') {
+        if (!goalkeeperRemoved) {
+          scene.remove(goalkeeper); // Eliminar el portero de la escena
+          goalkeeperRemoved = true;
+        } else {
+          scene.add(goalkeeper); // Reintegrar el portero a la escena
+          goalkeeperRemoved = false;
+        }
+      }
       if (e.key.toLowerCase() === 'r') {
         resetBallPosition();
         clearTimeout(resetTimeout); // Cancelar el temporizador de reinicio
@@ -208,6 +218,7 @@
           ballVelocity.set(0, 0, 0); // Detener la pelota
           ball.position.z = goalkeeper.position.z; // Asegurar que la pelota quede justo frente al portero
         } else {
+          deformNet();
           console.log('GOOOOOL!!! en la Portería 1');
           handleGoal();
           
@@ -287,6 +298,7 @@
       player.position.set(0,3.5,-5) // restablecer a tacuara
       player.rotation.set(0,0,0) // restablecer a tacuara
       resetMusic(); // Volver a la música de fondo
+      resetNet(); // Restablecer la red de la portería
     }
     // Agrega iluminación
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
@@ -313,18 +325,19 @@
     scene.add(field);
 
     // Crear las porterías
-    const goalMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
-    const goalFrameGeometry = new THREE.BoxGeometry(goalWidth, goalHeight, 0.1);
+    const goalMaterial = new THREE.MeshStandardMaterial({ color: 0xf0f0ff });
+    const goalFrameGeometry = new THREE.BoxGeometry(goalWidth*2, goalHeight*2, 0.1);
     const goalNetGeometry = new THREE.PlaneGeometry(7.32, 2.44);
 
     // Portería 1
     const goal1 = new THREE.Mesh(goalFrameGeometry, goalMaterial);
-    goal1.position.set(0, goalHeight/2, -34);
+    goal1.position.set(0, goalHeight/2, -35);
     scene.add(goal1);
+    
 
     // Portería 2
     const goal2 = new THREE.Mesh(goalFrameGeometry, goalMaterial);
-    goal2.position.set(0, goalHeight/2, 34);
+    goal2.position.set(0, goalHeight/2, 36);
     scene.add(goal2);
 
     
@@ -420,6 +433,84 @@
     const stadium = new THREE.Mesh(stadiumGeometry, stadiumMaterial);
     stadium.rotation.y = Math.PI; // Girar la esfera para alinear la textura correctamente
     scene.add(stadium);
+
+    // Crear la red para la portería 1
+    const netWidth = goalWidth;
+    const netHeight = goalHeight;
+    const netResolutionX = 30; // Número de segmentos en la malla (más segmentos = mejor calidad de animación)
+    const netResolutionY = 30;
+
+    const netTexture = new THREE.TextureLoader().load('./grid_texture.png'); // Asegúrate de usar una textura PNG de cuadrícula sin diagonales
+      netTexture.wrapS = THREE.RepeatWrapping;
+      netTexture.wrapT = THREE.RepeatWrapping;
+      netTexture.repeat.set(4,4); // Ajustar repeticiones de la textura
+
+      const netMaterial = new THREE.MeshStandardMaterial({
+        map: netTexture, // Aplicar la textura de la cuadrícula
+        transparent: true, // Mantener la transparencia de las áreas no cuadradas
+        side: THREE.DoubleSide, // Renderizar ambas caras de la red
+        opacity: 1, // Hacer la red parcialmente transparente
+      });
+
+      // Crear la malla de la red
+      const netGeometry = new THREE.PlaneGeometry(netWidth, netHeight, 10, 10); // Segmentos suficientes para deformación
+      const net = new THREE.Mesh(netGeometry, netMaterial);
+
+      // Posicionar la red en la portería 1
+      net.position.set(0, netHeight / 2, -34.05);
+      net.rotation.y = Math.PI;
+      scene.add(net);
+
+      const net2 = new THREE.Mesh(netGeometry, netMaterial);
+      net2.position.set(0, netHeight / 2, 34.05);
+      net2.rotation.y = Math.PI;
+      scene.add(net2);
+
+    // Animar la red de la portería
+    function animateNet() {
+      const time = performance.now() * 0.001; // Tiempo en segundos
+      const waveAmplitude = 0.4; // Amplitud de la onda
+      const waveFrequency = 4; // Frecuencia de la onda
+
+      const vertices = netGeometry.attributes.position.array;
+
+      for (let i = 0; i < vertices.length; i += 3) {
+        const x = vertices[i];
+        const y = vertices[i + 1];
+        vertices[i + 2] = Math.sin(x * waveFrequency + time) * Math.sin(y * waveFrequency + time) * waveAmplitude;
+      }
+
+      netGeometry.attributes.position.needsUpdate = true; // Notificar a Three.js que los vértices han cambiado
+    }
+    function deformNet() {
+      const impactRadius = 1; // Radio del área de impacto
+      const deformationDepth = 2; // Magnitud del retroceso en -Z
+    
+      const vertices = netGeometry.attributes.position.array;
+      const ballPosition = ball.position.clone();
+    
+      for (let i = 0; i < vertices.length; i += 3) {
+        const vertexPosition = new THREE.Vector3(vertices[i], vertices[i + 1], vertices[i + 2] - 34.05);
+    
+        // Calcular la distancia entre el vértice y la posición de la pelota
+        const distance = vertexPosition.distanceTo(ballPosition);
+    
+        if (distance < impactRadius) {
+          // Desplazar el vértice hacia -Z
+          vertices[i + 2] -= deformationDepth * (1 - distance / impactRadius); // Influencia decreciente según la distancia
+        }
+      }
+    
+      netGeometry.attributes.position.needsUpdate = true; // Notificar que los vértices han cambiado
+    }
+    
+    function resetNet() {
+      const vertices = netGeometry.attributes.position.array;
+      for (let i = 0; i < vertices.length; i += 3) {
+        vertices[i + 2] = 0; // Restaurar la posición Z original
+      }
+      netGeometry.attributes.position.needsUpdate = true; // Notificar actualización
+    }
 
     function moveGoalkeeper() {
       const timeToGoal = Math.abs(-33.5 - ball.position.z) / Math.abs(ballVelocity.z || 0.01); // Evitar división por 0
@@ -592,6 +683,7 @@
       requestAnimationFrame(animate);
       controls.update();
       updateBallPosition();
+      animateNet();
       updateGoalkeeperPosition(); // Actualizar la posición del portero
       renderer.render(scene, camera);
     }
